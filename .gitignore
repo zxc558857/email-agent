@@ -1,0 +1,10 @@
+.env
+credentials.json
+token.json
+
+last_emails.json
+archive_candidates.json
+
+__pycache__/
+
+*.zip
