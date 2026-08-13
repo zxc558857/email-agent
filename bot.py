@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 
 from actions import get_archive_candidates, confirm_archive_candidates, auto_label_emails
 from gmail_service import get_unread_emails
-from ai_summary import summarize_emails
 from telegram_notify import send_telegram_message
 
 load_dotenv()
@@ -19,6 +18,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 AUTO_HOURS = {8, 12, 17, 21}
+AUTO_EMAIL_LIMIT = 20
 STATE_FILE = Path("bot_state.json")
 
 
@@ -68,11 +68,135 @@ def send_error_message(action, error):
     send_telegram_message(msg)
 
 
+def count_importance(emails):
+    counts = {
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+        "archive": 0,
+    }
+
+    for mail in emails:
+        importance = mail.get("importance", {})
+        score = importance.get("score", 50)
+
+        if score >= 80:
+            counts["high"] += 1
+        elif score >= 50:
+            counts["medium"] += 1
+        else:
+            counts["low"] += 1
+
+        if importance.get("can_archive") is True:
+            counts["archive"] += 1
+
+    return counts
+
+
+def get_label_category(label_name):
+    if label_name.startswith("AI/金融"):
+        return "金融"
+    if label_name == "AI/工作":
+        return "工作"
+    if label_name == "AI/學校":
+        return "學校"
+    if label_name == "AI/社群":
+        return "社群"
+    if label_name == "AI/購物":
+        return "購物"
+    if label_name == "AI/可封存":
+        return "廣告"
+    if label_name == "AI/AI資訊":
+        return "AI資訊"
+    if label_name == "AI/重要":
+        return "重要"
+    if label_name == "AI/一般":
+        return "一般"
+    return "其他"
+
+
+def count_label_categories(labeled):
+    categories = {
+        "金融": 0,
+        "工作": 0,
+        "學校": 0,
+        "社群": 0,
+        "購物": 0,
+        "廣告": 0,
+        "AI資訊": 0,
+        "重要": 0,
+        "一般": 0,
+        "其他": 0,
+    }
+
+    for item in labeled:
+        category = get_label_category(item.get("label", ""))
+        categories[category] += 1
+
+    return categories
+
+
+def format_recent_emails(emails, limit=5):
+    if not emails:
+        return "目前沒有未讀郵件。"
+
+    lines = []
+
+    for i, mail in enumerate(emails[:limit], start=1):
+        importance = mail.get("importance", {})
+        level = importance.get("level", "未分類")
+        score = importance.get("score", 0)
+        subject = mail.get("subject") or "(無主旨)"
+        lines.append(f"{i}. {subject}\n   重要度：{level}｜{score}分")
+
+    return "\n".join(lines)
+
+
+def build_rule_summary_message(emails, labeled, now_taipei):
+    importance_counts = count_importance(emails)
+    category_counts = count_label_categories(labeled)
+    category_lines = "\n".join(
+        f"{name}：{count}"
+        for name, count in category_counts.items()
+        if count > 0
+    )
+
+    if not category_lines:
+        category_lines = "目前沒有可統計的分類。"
+
+    return f"""
+📬 郵件規則整理完成
+
+時間：{now_taipei.strftime('%Y-%m-%d %H:%M')}
+
+未讀郵件：{len(emails)} 封
+已加 Gmail 標籤：{len(labeled)} 封
+
+重要度統計：
+🔴 高重要：{importance_counts['high']}
+🟡 中重要：{importance_counts['medium']}
+⚪ 低重要：{importance_counts['low']}
+📦 可封存：{importance_counts['archive']}
+
+分類統計：
+{category_lines}
+
+最近郵件：
+{format_recent_emails(emails)}
+
+自動整理僅使用規則，不使用 OpenAI API。
+若需要 AI 深度摘要，請輸入「整理」或 /summary。
+"""
+
+
 def run_summary(show_loading=False):
     if show_loading:
         send_telegram_message("📬 正在整理 Gmail，請稍等...")
 
     emails = get_unread_emails(limit=10)
+
+    from ai_summary import summarize_emails
+
     summary = summarize_emails(emails)
 
     now_taipei = datetime.now(TAIPEI_TZ)
@@ -92,6 +216,16 @@ def run_summary(show_loading=False):
 
 目前版本：支援中文指令、/summary、/archive、/label 與自動整理。
 """
+
+    send_telegram_message(message)
+
+
+def run_rule_summary():
+    emails = get_unread_emails(limit=AUTO_EMAIL_LIMIT)
+    labeled = auto_label_emails() if emails else []
+
+    now_taipei = datetime.now(TAIPEI_TZ)
+    message = build_rule_summary_message(emails, labeled, now_taipei)
 
     send_telegram_message(message)
 
@@ -325,7 +459,7 @@ def run_auto_summary(run_key, state):
     print(f"自動整理啟動：{run_key}")
 
     try:
-        run_summary()
+        run_rule_summary()
         state["last_auto_run_status"] = "success"
         state.pop("last_auto_run_error", None)
     except Exception as e:
