@@ -93,6 +93,15 @@ def detect_bank_label(content):
         "台新": [
             "台新",
             "taishin"
+        ],
+        "合作金庫": [
+            "合作金庫",
+            "合作金庫銀行",
+            "tcb",
+            "tcb-bank",
+            "tcb bank",
+            "tcb.com.tw",
+            "taiwan cooperative bank"
         ]
     }
 
@@ -147,10 +156,18 @@ def detect_finance_type(content):
     bill_keywords = [
         "帳單",
         "電子帳單",
+        "電子綜合對帳單",
+        "對帳單",
+        "電子對帳單",
+        "月結單",
+        "月結帳單",
+        "信用卡帳單",
+        "信用卡電子帳單",
+        "繳款通知",
         "繳費",
         "扣款",
-        "對帳單",
-        "應繳"
+        "應繳",
+        "應繳金額"
     ]
 
     promo_keywords = [
@@ -159,8 +176,17 @@ def detect_finance_type(content):
         "點數",
         "現金回饋",
         "折扣",
-        "活動"
+        "活動",
+        "信貸",
+        "貸款",
+        "月付金",
+        "彈性規劃",
+        "利率",
+        "分期"
     ]
+
+    if any(k.lower() in content for k in bill_keywords):
+        return "帳單"
 
     if any(k.lower() in content for k in login_keywords):
         return "登入紀錄"
@@ -174,16 +200,126 @@ def detect_finance_type(content):
     if any(k.lower() in content for k in card_keywords):
         return "信用卡"
 
-    if any(k.lower() in content for k in bill_keywords):
-        return "帳單"
-
     if any(k.lower() in content for k in promo_keywords):
         return "優惠"
 
     return "一般通知"
 
 
-def detect_general_label(content, importance):
+def detect_security_label(content, subject=""):
+    security_rules = [
+        (
+            "AI/安全/帳戶異常",
+            [
+                "登入失敗",
+                "異常登入",
+                "帳戶異常",
+                "可疑活動",
+                "suspicious activity",
+                "unknown device",
+                "未知裝置",
+                "不明裝置",
+                "帳戶遭到",
+                "account alert"
+            ]
+        ),
+        (
+            "AI/安全/Passkey",
+            [
+                "passkey",
+                "通行密鑰",
+                "安全金鑰"
+            ]
+        ),
+        (
+            "AI/安全/第三方授權",
+            [
+                "oauth",
+                "第三方存取",
+                "第三方授權",
+                "third-party access",
+                "third party access",
+                "帳戶存取",
+                "account access",
+                "帳戶資料",
+                "google 帳戶資料",
+                "分享了部分 google 帳戶資料",
+                "可存取您的部分 google 帳戶資料"
+            ]
+        ),
+        (
+            "AI/安全/密碼",
+            [
+                "密碼變更",
+                "密碼已變更",
+                "修改密碼",
+                "重設密碼",
+                "忘記密碼",
+                "密碼異常",
+                "password changed",
+                "password reset",
+                "reset password",
+                "new password",
+                "變更密碼"
+            ]
+        ),
+        (
+            "AI/安全/驗證",
+            [
+                "驗證碼",
+                "verification",
+                "otp",
+                "one-time password",
+                "兩步驟驗證",
+                "雙重驗證"
+            ]
+        ),
+        (
+            "AI/安全/登入紀錄",
+            [
+                "登入成功",
+                "登入失敗",
+                "登入通知",
+                "sign-in",
+                "new sign-in",
+                "新登入",
+                "新裝置",
+                "new device",
+                "登入活動",
+                "新登入活動"
+            ]
+        ),
+        (
+            "AI/安全/一般",
+            [
+                "安全性快訊",
+                "安全通知",
+                "安全性通知",
+                "安全提醒",
+                "security alert",
+                "security notice",
+                "google 帳戶",
+                "account security"
+            ]
+        )
+    ]
+
+    search_targets = []
+
+    if subject:
+        search_targets.append(subject.lower())
+
+    search_targets.append(content)
+
+    for target in search_targets:
+        for label_name, keywords in security_rules:
+            if any(keyword.lower() in target for keyword in keywords):
+                return label_name
+
+    return None
+
+
+def detect_general_label(content, importance, subject=""):
     score = importance.get("score", 50)
     can_archive = importance.get("can_archive", False)
 
@@ -264,6 +400,10 @@ def detect_general_label(content, importance):
     if any(k.lower() in content for k in school_keywords):
         return "AI/學校"
 
+    security_label = detect_security_label(content, subject)
+    if security_label:
+        return security_label
+
     if any(k.lower() in content for k in ai_keywords):
         return "AI/AI資訊"
 
@@ -306,7 +446,7 @@ def auto_label_emails():
             finance_type = detect_finance_type(content)
             label_name = f"AI/金融/{bank_name}/{finance_type}"
         else:
-            label_name = detect_general_label(content, importance)
+            label_name = detect_general_label(content, importance, subject)
 
         try:
             label_id = get_or_create_label(label_name)
