@@ -4,7 +4,8 @@ token.json
 
 last_emails.json
 archive_candidates.json
+bot_state.json
 
 __pycache__/
-
+*.pyc
 *.zip
