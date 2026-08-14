@@ -3,6 +3,7 @@ import base64
 import json
 
 from mail_rules import score_email
+from datetime import date, datetime, timedelta
 from email import message_from_bytes
 
 from google.oauth2.credentials import Credentials
@@ -84,6 +85,110 @@ def get_unread_emails(limit=10):
             indent=2
         )
     return emails
+
+
+def _format_gmail_search_date(value):
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        value = value.date()
+    elif isinstance(value, str):
+        value = date.fromisoformat(value)
+
+    return value.strftime("%Y/%m/%d")
+
+
+def _build_index_query(days=90, date_from=None, date_to=None, query=None):
+    parts = []
+
+    if query:
+        parts.append(query)
+
+    if date_from:
+        parts.append(f"after:{_format_gmail_search_date(date_from)}")
+    elif days:
+        start_date = date.today() - timedelta(days=days)
+        parts.append(f"after:{_format_gmail_search_date(start_date)}")
+
+    if date_to:
+        end_date = date_to
+        if isinstance(end_date, str):
+            end_date = date.fromisoformat(end_date)
+        if isinstance(end_date, datetime):
+            end_date = end_date.date()
+        # Gmail before: is exclusive, so add one day for inclusive date_to.
+        parts.append(f"before:{_format_gmail_search_date(end_date + timedelta(days=1))}")
+
+    return " ".join(parts)
+
+
+def get_emails_for_index(days=90, date_from=None, date_to=None, limit=None, query=None):
+    service = get_gmail_service()
+    gmail_query = _build_index_query(
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
+        query=query,
+    )
+
+    emails = []
+    page_token = None
+
+    while True:
+        request = {
+            "userId": "me",
+            "q": gmail_query,
+            "maxResults": min(500, limit - len(emails)) if limit else 500,
+        }
+
+        if page_token:
+            request["pageToken"] = page_token
+
+        results = service.users().messages().list(**request).execute()
+        messages = results.get("messages", [])
+
+        for msg in messages:
+            msg_data = service.users().messages().get(
+                userId="me",
+                id=msg["id"],
+                format="metadata",
+                metadataHeaders=["From", "Subject", "Date"],
+            ).execute()
+
+            headers = msg_data.get("payload", {}).get("headers", [])
+
+            email_info = {
+                "id": msg["id"],
+                "thread_id": msg_data.get("threadId", ""),
+                "internal_date": msg_data.get("internalDate"),
+                "from": "",
+                "subject": "",
+                "date": "",
+                "snippet": msg_data.get("snippet", ""),
+                "label_ids": msg_data.get("labelIds", []),
+            }
+
+            for h in headers:
+                name = h.get("name")
+                if name == "From":
+                    email_info["from"] = h.get("value", "")
+                elif name == "Subject":
+                    email_info["subject"] = h.get("value", "")
+                elif name == "Date":
+                    email_info["date"] = h.get("value", "")
+
+            email_info["importance"] = score_email(email_info)
+            emails.append(email_info)
+
+            if limit and len(emails) >= limit:
+                return emails
+
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            return emails
+
+
 def get_or_create_label(label_name):
     service = get_gmail_service()
 

@@ -5,6 +5,9 @@ token.json
 last_emails.json
 archive_candidates.json
 bot_state.json
+email_index.db
+email_index.db-shm
+email_index.db-wal
 
 __pycache__/
 *.pyc

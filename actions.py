@@ -1,5 +1,6 @@
 ﻿import json
 from gmail_service import get_gmail_service, get_unread_emails, get_or_create_label
+from mail_rules import score_email
 
 
 def archive_email(message_id):
@@ -113,21 +114,43 @@ def detect_bank_label(content):
     return None
 
 
-def detect_finance_type(content):
+def _contains_any(text, keywords):
+    text = (text or "").lower()
+    return any(keyword.lower() in text for keyword in keywords)
+
+
+def detect_finance_type(subject, content=""):
+    subject_text = (subject or "").lower()
+    content_text = (content or "").lower()
+
+    bill_keywords = [
+        "電子對帳單",
+        "電子綜合對帳單",
+        "綜合對帳單",
+        "銀行對帳單",
+        "對帳單",
+        "信用卡帳單",
+        "信用卡電子帳單",
+        "電子帳單",
+        "月結帳單",
+        "月結單",
+        "statement",
+        "e-statement"
+    ]
+
     login_keywords = [
-        "登入",
-        "login",
-        "登入成功",
-        "登入失敗",
-        "安全通知",
-        "安全性通知",
-        "安全提醒",
-        "驗證",
-        "otp",
-        "裝置",
-        "ip",
-        "異常",
-        "密碼"
+        "登入成功通知",
+        "登入失敗通知",
+        "行動銀行app登入成功",
+        "行動銀行 app 登入成功",
+        "生物辨識登入成功",
+        "新登入通知",
+        "新裝置登入",
+        "異常登入",
+        "登入通知",
+        "login success",
+        "login failed",
+        "sign-in alert"
     ]
 
     withdraw_keywords = [
@@ -153,21 +176,13 @@ def detect_finance_type(content):
         "金融卡"
     ]
 
-    bill_keywords = [
-        "帳單",
-        "電子帳單",
-        "電子綜合對帳單",
-        "對帳單",
-        "電子對帳單",
-        "月結單",
-        "月結帳單",
-        "信用卡帳單",
-        "信用卡電子帳單",
+    payment_keywords = [
         "繳款通知",
-        "繳費",
         "扣款",
         "應繳",
-        "應繳金額"
+        "應繳金額",
+        "卡費",
+        "付款"
     ]
 
     promo_keywords = [
@@ -185,23 +200,88 @@ def detect_finance_type(content):
         "分期"
     ]
 
-    if any(k.lower() in content for k in bill_keywords):
-        return "帳單"
+    promo_subject_keywords = [
+        "優惠",
+        "限時",
+        "領券",
+        "抽",
+        "最高",
+        "回饋",
+        "活動"
+    ]
 
-    if any(k.lower() in content for k in login_keywords):
-        return "登入紀錄"
+    bill_reminder_keywords = [
+        "帳單繳款截止",
+        "繳款截止日",
+        "帳單截止日",
+        "繳款提醒",
+        "提醒您繳款",
+        "帳單即將到期"
+    ]
 
-    if any(k.lower() in content for k in withdraw_keywords):
-        return "提款通知"
+    loan_notice_keywords = [
+        "撥款通知",
+        "貸款撥款",
+        "就學貸款",
+        "核貸通知",
+        "貸款審核"
+    ]
 
-    if any(k.lower() in content for k in transfer_keywords):
-        return "轉帳通知"
+    has_subject_bill = _contains_any(subject_text, bill_keywords)
 
-    if any(k.lower() in content for k in card_keywords):
+    if _contains_any(subject_text, bill_reminder_keywords):
         return "信用卡"
 
-    if any(k.lower() in content for k in promo_keywords):
+    if _contains_any(subject_text, loan_notice_keywords) and not has_subject_bill:
+        return "一般通知"
+
+    if has_subject_bill:
+        return "帳單"
+
+    if _contains_any(subject_text, promo_subject_keywords) and not _contains_any(
+        subject_text,
+        login_keywords,
+    ):
         return "優惠"
+
+    if _contains_any(subject_text, login_keywords) or _contains_any(
+        content_text,
+        login_keywords,
+    ):
+        return "登入紀錄"
+
+    if _contains_any(subject_text, transfer_keywords):
+        return "轉帳通知"
+
+    if _contains_any(subject_text, withdraw_keywords):
+        return "提款通知"
+
+    if _contains_any(subject_text, card_keywords) or _contains_any(
+        subject_text,
+        payment_keywords,
+    ):
+        return "信用卡"
+
+    if _contains_any(subject_text, promo_keywords) or _contains_any(
+        content_text,
+        promo_keywords,
+    ):
+        return "優惠"
+
+    if _contains_any(content_text, bill_keywords):
+        return "帳單"
+
+    if _contains_any(content_text, transfer_keywords):
+        return "轉帳通知"
+
+    if _contains_any(content_text, withdraw_keywords):
+        return "提款通知"
+
+    if _contains_any(content_text, card_keywords) or _contains_any(
+        content_text,
+        payment_keywords,
+    ):
+        return "信用卡"
 
     return "一般通知"
 
@@ -252,6 +332,7 @@ def detect_security_label(content, subject=""):
             [
                 "密碼變更",
                 "密碼已變更",
+                "密碼重置",
                 "修改密碼",
                 "重設密碼",
                 "忘記密碼",
@@ -285,6 +366,7 @@ def detect_security_label(content, subject=""):
                 "新登入",
                 "新裝置",
                 "new device",
+                "有新裝置正在使用您的帳戶",
                 "登入活動",
                 "新登入活動"
             ]
@@ -304,15 +386,77 @@ def detect_security_label(content, subject=""):
         )
     ]
 
+    subject_text = (subject or "").lower()
+    content_text = (content or "").lower()
+    commerce_subject_keywords = [
+        "訂單",
+        "已付款",
+        "付款狀態",
+        "出貨",
+        "購物",
+        "訂購"
+    ]
+    password_subject_keywords = [
+        "密碼重置",
+        "密碼變更",
+        "password reset",
+        "password changed",
+        "account password"
+    ]
+    non_security_subject_keywords = [
+        "升級",
+        "產品介紹",
+        "優惠",
+        "限時",
+        "領券",
+        "抽",
+        "最高",
+        "回饋",
+        "活動"
+    ]
+    login_keywords = [
+        "登入成功",
+        "登入失敗",
+        "登入通知",
+        "sign-in",
+        "new sign-in",
+        "新登入",
+        "新裝置",
+        "new device",
+        "有新裝置正在使用您的帳戶",
+        "登入活動",
+        "新登入活動"
+    ]
+    commerce_password_guard = _contains_any(
+        subject_text,
+        commerce_subject_keywords,
+    ) and not _contains_any(subject_text, password_subject_keywords)
+    content_login_guard = (
+        not _contains_any(subject_text, login_keywords)
+        and _contains_any(subject_text, non_security_subject_keywords)
+    )
+
     search_targets = []
 
-    if subject:
-        search_targets.append(subject.lower())
+    if subject_text:
+        search_targets.append(("subject", subject_text))
 
-    search_targets.append(content)
+    search_targets.append(("content", content_text))
 
-    for target in search_targets:
+    for target_name, target in search_targets:
         for label_name, keywords in security_rules:
+            if (
+                target_name == "content"
+                and label_name == "AI/安全/密碼"
+                and commerce_password_guard
+            ):
+                continue
+            if (
+                target_name == "content"
+                and label_name == "AI/安全/登入紀錄"
+                and content_login_guard
+            ):
+                continue
             if any(keyword.lower() in target for keyword in keywords):
                 return label_name
 
@@ -425,6 +569,37 @@ def detect_general_label(content, importance, subject=""):
     return "AI/一般"
 
 
+def determine_email_classification(mail):
+    importance = mail.get("importance")
+    if not importance:
+        importance = score_email(mail)
+
+    subject = mail.get("subject", "")
+    sender = mail.get("from", mail.get("sender", ""))
+    snippet = mail.get("snippet", "")
+    content = f"{subject} {sender} {snippet}".lower()
+
+    bank_name = detect_bank_label(content)
+    finance_type = None
+    security_type = None
+
+    if bank_name:
+        finance_type = detect_finance_type(subject, content)
+        label_name = f"AI/金融/{bank_name}/{finance_type}"
+    else:
+        label_name = detect_general_label(content, importance, subject)
+        if label_name.startswith("AI/安全/"):
+            security_type = label_name.split("/", 2)[2]
+
+    return {
+        "label": label_name,
+        "bank": bank_name,
+        "finance_type": finance_type,
+        "security_type": security_type,
+        "importance": importance,
+    }
+
+
 def auto_label_emails():
     emails = get_unread_emails(limit=20)
 
@@ -434,19 +609,8 @@ def auto_label_emails():
 
     for mail in emails:
         subject = mail.get("subject", "")
-        sender = mail.get("from", "")
-        snippet = mail.get("snippet", "")
-        importance = mail.get("importance", {})
-
-        content = f"{subject} {sender} {snippet}".lower()
-
-        bank_name = detect_bank_label(content)
-
-        if bank_name:
-            finance_type = detect_finance_type(content)
-            label_name = f"AI/金融/{bank_name}/{finance_type}"
-        else:
-            label_name = detect_general_label(content, importance, subject)
+        classification = determine_email_classification(mail)
+        label_name = classification["label"]
 
         try:
             label_id = get_or_create_label(label_name)
