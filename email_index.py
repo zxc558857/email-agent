@@ -129,7 +129,9 @@ def _date_start_ms(value):
     if isinstance(value, str):
         value = date.fromisoformat(value)
     if isinstance(value, datetime):
-        value = value.date()
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return int(value.timestamp() * 1000)
     dt = datetime.combine(value, time.min, tzinfo=timezone.utc)
     return int(dt.timestamp() * 1000)
 
@@ -138,7 +140,9 @@ def _date_end_exclusive_ms(value):
     if isinstance(value, str):
         value = date.fromisoformat(value)
     if isinstance(value, datetime):
-        value = value.date()
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return int(value.timestamp() * 1000)
     return _date_start_ms(value + timedelta(days=1))
 
 
@@ -580,6 +584,11 @@ def get_recent_emails(limit=20, days=7, db_path=None):
         limit=limit,
         db_path=db_path,
     )
+
+
+def get_emails(date_from=None, date_to=None, limit=20, db_path=None):
+    where, params = _date_filters(date_from, date_to)
+    return _query_emails(where, params, limit=limit, db_path=db_path)
 
 
 def get_important_emails(min_score=80, limit=20, days=None, db_path=None):
