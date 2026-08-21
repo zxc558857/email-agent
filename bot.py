@@ -1,10 +1,9 @@
 import json
 import os
-import re
 import time
 from collections import Counter, defaultdict
 from datetime import datetime
-from email.utils import parseaddr
+from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -12,7 +11,9 @@ import requests
 from dotenv import load_dotenv
 
 from actions import get_archive_candidates, confirm_archive_candidates, auto_label_emails
+from bank_aliases import BANK_ALIASES, normalize_bank_name, normalize_query_text
 from gmail_service import get_unread_emails
+from query_parser import parse_query
 from telegram_notify import send_telegram_message
 
 load_dotenv()
@@ -25,18 +26,6 @@ AUTO_EMAIL_LIMIT = 20
 STATE_FILE = Path("bot_state.json")
 QUERY_LIMIT = 20
 MESSAGE_SAFE_LIMIT = 3500
-
-BANK_ALIASES = {
-    "中國信託": ["中國信託", "中信"],
-    "富邦": ["富邦", "台北富邦"],
-    "國泰世華": ["國泰", "國泰世華"],
-    "LINE Bank": ["line bank", "linebank", "LINE Bank"],
-    "合作金庫": ["合作金庫", "合庫"],
-    "永豐": ["永豐"],
-    "玉山": ["玉山"],
-    "元大": ["元大"],
-    "台新": ["台新"],
-}
 
 TODAY_EMAIL_COMMANDS = {
     "今日郵件",
@@ -198,7 +187,142 @@ def format_unread_email_list(emails, limit=5):
     return "\n".join(lines)
 
 
+def _normalize_current_rule_emails(emails):
+    normalized = []
+    for mail in emails:
+        if mail.get("importance_score") is not None:
+            normalized.append(mail)
+            continue
+
+        importance = mail.get("importance") or {}
+        score = importance.get("score") if isinstance(importance, dict) else None
+        if score is None:
+            normalized.append(mail)
+        else:
+            normalized.append({**mail, "importance_score": score})
+
+    return normalized
+
+
+def _email_identity_key(mail):
+    for key in ("message_id", "id"):
+        value = mail.get(key)
+        if value:
+            return key, value
+
+    return (
+        "content",
+        clean_sender(mail),
+        clean_subject(mail),
+        mail.get("date") or mail.get("internal_date") or "",
+    )
+
+
+def _dedupe_emails(emails):
+    result = []
+    seen = set()
+    for mail in emails:
+        key = _email_identity_key(mail)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(mail)
+    return result
+
+
+def _importance_score(mail):
+    try:
+        return int(mail.get("importance_score") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _email_sort_timestamp(mail):
+    value = mail.get("date") or mail.get("internal_date")
+    if value is None:
+        return float("-inf")
+
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, (int, float)):
+        dt = datetime.fromtimestamp(value / 1000, tz=ZoneInfo("UTC"))
+    else:
+        text = str(value).replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            try:
+                dt = parsedate_to_datetime(str(value))
+            except (TypeError, ValueError, IndexError, OverflowError):
+                return float("-inf")
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+
+    return dt.timestamp()
+
+
+def format_rule_summary_important_emails(emails, limit=5):
+    important = [
+        mail
+        for mail in _dedupe_emails(emails)
+        if _importance_score(mail) >= 80
+    ]
+    important.sort(
+        key=lambda mail: (_importance_score(mail), _email_sort_timestamp(mail)),
+        reverse=True,
+    )
+
+    if not important:
+        return "🔴 本次重要郵件\n本時段沒有高重要郵件。"
+
+    lines = ["🔴 本次重要郵件", ""]
+    for i, mail in enumerate(important[:limit], start=1):
+        lines.extend(
+            [
+                f"{i}. {_importance_score(mail)}分｜{clean_sender(mail)}",
+                f"   {clean_subject(mail)}",
+                "",
+            ]
+        )
+
+    hidden = len(important) - min(len(important), limit)
+    if hidden:
+        lines.append(f"另外還有 {hidden} 封重要郵件。")
+
+    return "\n".join(lines).strip()
+
+
+def format_rule_summary_reply_required_emails(emails, limit=5):
+    from mail_rules import needs_reply
+
+    reply_required = []
+    for mail in _dedupe_emails(emails):
+        if needs_reply(_mail_for_reply_rules(mail)) is True:
+            reply_required.append(mail)
+
+    if not reply_required:
+        return "📩 本次需要回覆\n本時段沒有需要回覆的郵件。"
+
+    lines = ["📩 本次需要回覆", ""]
+    for i, mail in enumerate(reply_required[:limit], start=1):
+        lines.extend(
+            [
+                f"{i}. {clean_sender(mail)}",
+                f"   {clean_subject(mail)}",
+                "",
+            ]
+        )
+
+    hidden = len(reply_required) - min(len(reply_required), limit)
+    if hidden:
+        lines.append(f"另外還有 {hidden} 封需要回覆的郵件。")
+
+    return "\n".join(lines).strip()
+
+
 def build_rule_summary_message(emails, labeled, now_taipei):
+    emails = _normalize_current_rule_emails(emails)
     importance_counts = count_importance(emails)
     category_counts = count_label_categories(labeled)
     category_lines = "\n".join(
@@ -227,25 +351,16 @@ def build_rule_summary_message(emails, labeled, now_taipei):
 分類統計：
 {category_lines}
 
+{format_rule_summary_important_emails(emails)}
+
+{format_rule_summary_reply_required_emails(emails)}
+
 最近郵件：
 {format_unread_email_list(emails)}
 
-自動整理僅使用規則，不使用 OpenAI API。
+自動整理使用規則，不使用 OpenAI API。
 若需要 AI 深度摘要，請輸入「整理」或 /summary。
 """
-
-
-def normalize_query_text(text):
-    return re.sub(r"\s+", "", (text or "").strip().lower())
-
-
-def normalize_bank_name(text):
-    normalized_text = normalize_query_text(text)
-    for bank_name, aliases in BANK_ALIASES.items():
-        for alias in aliases:
-            if normalize_query_text(alias) in normalized_text:
-                return bank_name
-    return None
 
 
 def get_current_month_range(now=None):
@@ -428,9 +543,9 @@ def format_recent_index_emails(emails, limit=QUERY_LIMIT):
     return "\n".join(lines).strip()
 
 
-def format_important_emails(emails, limit=QUERY_LIMIT):
+def format_important_emails(emails, limit=QUERY_LIMIT, title="🔴 最近重要郵件"):
     shown = emails[:limit]
-    lines = ["🔴 最近重要郵件", ""]
+    lines = [title, ""]
 
     if not shown:
         lines.append("目前索引中沒有找到重要郵件。")
@@ -501,7 +616,13 @@ def is_abnormal_login(mail):
     return any(keyword in subject for keyword in ["失敗", "異常", "unknown", "failed"])
 
 
-def format_login_records(emails, bank_name=None, bank_only=False, limit=QUERY_LIMIT):
+def format_login_records(
+    emails,
+    bank_name=None,
+    bank_only=False,
+    status=None,
+    limit=QUERY_LIMIT,
+):
     shown = emails[:limit]
     if bank_name:
         title = f"🔐 {bank_title(bank_name)}登入紀錄"
@@ -511,9 +632,17 @@ def format_login_records(emails, bank_name=None, bank_only=False, limit=QUERY_LI
         title = "🔐 最近登入紀錄"
 
     lines = [title, ""]
+    status_text = {
+        "failure": "登入失敗",
+        "abnormal": "登入異常",
+        "success": "登入成功",
+    }.get(status)
 
     if not shown:
-        lines.append("目前索引中沒有找到登入紀錄。")
+        if status_text:
+            lines.append(f"目前指定期間沒有找到{status_text}紀錄。")
+        else:
+            lines.append("目前索引中沒有找到登入紀錄。")
         return "\n".join(lines)
 
     normal = [mail for mail in shown if not is_abnormal_login(mail)]
@@ -552,9 +681,10 @@ def format_login_records(emails, bank_name=None, bank_only=False, limit=QUERY_LI
     return "\n".join(lines).strip()
 
 
-def format_security_emails(emails, limit=QUERY_LIMIT):
+def format_security_emails(emails, keyword=None, limit=QUERY_LIMIT):
     shown = emails[:limit]
-    lines = ["🔐 最近安全通知", ""]
+    title = f"🔐 {keyword} 安全通知" if keyword else "🔐 最近安全通知"
+    lines = [title, ""]
 
     if not shown:
         lines.append("目前沒有找到安全通知。")
@@ -580,6 +710,77 @@ def format_security_emails(emails, limit=QUERY_LIMIT):
         lines.append(f"另外還有 {hidden} 封未顯示。")
 
     return "\n".join(lines).strip()
+
+
+def format_generic_emails(title, emails, empty_message, limit=QUERY_LIMIT):
+    shown = emails[:limit]
+    lines = [title, ""]
+
+    if not shown:
+        lines.append(empty_message)
+        return "\n".join(lines)
+
+    for mail in shown:
+        lines.extend(
+            [
+                f"• {format_email_datetime(mail)}",
+                f"  {clean_sender(mail)}",
+                f"  {clean_subject(mail)}",
+                "",
+            ]
+        )
+
+    lines.append(f"共 {len(emails)} 封。")
+    hidden = hidden_count(emails, limit)
+    if hidden:
+        lines.append(f"另外還有 {hidden} 封未顯示。")
+
+    return "\n".join(lines).strip()
+
+
+def format_reply_required_emails(emails, limit=QUERY_LIMIT):
+    return format_generic_emails(
+        "📩 待回覆郵件",
+        emails,
+        "目前指定期間沒有找到需要回覆的郵件。",
+        limit=limit,
+    )
+
+
+def format_action_required_emails(emails, limit=QUERY_LIMIT):
+    return format_generic_emails(
+        "⚠️ 需要處理的郵件",
+        emails,
+        "目前指定期間沒有找到需要處理的郵件。",
+        limit=limit,
+    )
+
+
+def format_sender_search_emails(keyword, emails, limit=QUERY_LIMIT):
+    return format_generic_emails(
+        f"🔎 {keyword} 最近郵件",
+        emails,
+        f"目前指定期間沒有找到 {keyword} 的郵件。",
+        limit=limit,
+    )
+
+
+def format_keyword_search_emails(keyword, emails, limit=QUERY_LIMIT):
+    return format_generic_emails(
+        f"🔎 包含「{keyword}」的郵件",
+        emails,
+        f"目前指定期間沒有找到包含「{keyword}」的郵件。",
+        limit=limit,
+    )
+
+
+def format_category_emails(title, emails, limit=QUERY_LIMIT):
+    return format_generic_emails(
+        title,
+        emails,
+        "目前指定期間沒有找到符合條件的郵件。",
+        limit=limit,
+    )
 
 
 def build_sync_success_message(stats):
@@ -609,28 +810,22 @@ def detect_query(text):
     if raw_text in UPDATE_INDEX_COMMANDS:
         return {"type": "update_index"}
 
-    if raw_text in SECURITY_COMMANDS or "安全通知" in raw_text or "安全性快訊" in raw_text:
+    if raw_text in SECURITY_COMMANDS:
         return {"type": "security"}
 
-    if raw_text in TODAY_EMAIL_COMMANDS or (
-        ("今天" in raw_text or "今日" in raw_text)
-        and ("郵件" in raw_text or "信" in raw_text)
-    ):
+    if raw_text in TODAY_EMAIL_COMMANDS:
         return {"type": "today"}
 
-    if raw_text in IMPORTANT_EMAIL_COMMANDS or (
-        "重要" in raw_text and ("郵件" in raw_text or "信" in raw_text)
-    ):
+    if raw_text in IMPORTANT_EMAIL_COMMANDS:
         return {"type": "important"}
 
-    if raw_text in RECENT_EMAIL_COMMANDS or (
-        "最近" in raw_text
-        and ("郵件" in raw_text or "信" in raw_text)
-        and "重要" not in raw_text
-    ):
+    if raw_text in RECENT_EMAIL_COMMANDS:
         return {"type": "recent"}
 
-    if "登入" in raw_text:
+    if normalized in {"登入紀錄", "登入記錄", "銀行登入"} or _is_fixed_bank_login(
+        raw_text,
+        bank_name,
+    ):
         bank_only = bank_name is not None or "銀行" in raw_text
         return {
             "type": "login",
@@ -638,12 +833,7 @@ def detect_query(text):
             "bank_only": bank_only,
         }
 
-    is_statement = (
-        "帳單" in raw_text
-        or "對帳單" in raw_text
-        or normalized in {"銀行帳單", "銀行對帳單", "帳單", "對帳單"}
-    )
-    if is_statement:
+    if _is_fixed_bank_statement(raw_text, normalized, bank_name):
         current_month = "本月" in raw_text or "這個月" in raw_text
         return {
             "type": "bank_statement",
@@ -652,6 +842,22 @@ def detect_query(text):
         }
 
     return None
+
+
+def _is_fixed_bank_statement(raw_text, normalized, bank_name):
+    if normalized in {"銀行帳單", "銀行對帳單", "帳單", "對帳單", "本月帳單"}:
+        return True
+    if not bank_name or ("帳單" not in raw_text and "對帳單" not in raw_text):
+        return False
+    natural_words = ["最近", "哪些", "有沒有", "有什麼", "嗎", "？", "?"]
+    return not any(word in raw_text for word in natural_words)
+
+
+def _is_fixed_bank_login(raw_text, bank_name):
+    if not bank_name or "登入" not in raw_text:
+        return False
+    natural_words = ["最近", "哪些", "有沒有", "紀錄嗎", "記錄嗎", "失敗", "異常", "？", "?"]
+    return not any(word in raw_text for word in natural_words)
 
 
 def handle_query_command(query):
@@ -723,6 +929,267 @@ def handle_query_command(query):
         send_long_message("⚠️ 郵件索引查詢失敗，請稍後再試。")
 
     return True
+
+
+def handle_natural_query(parsed):
+    if not parsed.matched:
+        return False
+
+    if not is_email_index_available():
+        send_index_missing_message()
+        return True
+
+    from email_index import (
+        get_bank_statements,
+        get_emails,
+        get_login_records,
+        get_recent_emails,
+        get_security_emails,
+        search_emails,
+    )
+
+    try:
+        limit = QUERY_LIMIT + 1
+        if parsed.intent == "today_emails":
+            if parsed.date_from is None:
+                date_from, date_to = get_today_range()
+            else:
+                date_from, date_to = parsed.date_from, parsed.date_to
+            if parsed.min_importance:
+                emails = search_emails(
+                    min_importance=parsed.min_importance,
+                    date_from=date_from,
+                    date_to=date_to,
+                    limit=limit,
+                )
+                send_long_message(format_important_emails(emails, title="🔴 今日重要郵件"))
+            else:
+                emails = get_emails(date_from=date_from, date_to=date_to, limit=None)
+                send_long_message(format_today_emails(emails))
+        elif parsed.intent == "recent_emails":
+            if parsed.date_from or parsed.date_to:
+                emails = get_emails(
+                    date_from=parsed.date_from,
+                    date_to=parsed.date_to,
+                    limit=limit,
+                )
+                title = f"📬 {parsed.date_label or '最近'}郵件"
+                send_long_message(
+                    format_generic_emails(title, emails, "目前指定期間沒有找到郵件。")
+                )
+            else:
+                emails = get_recent_emails(limit=limit, days=90)
+                send_long_message(format_recent_index_emails(emails))
+        elif parsed.intent == "important_emails":
+            emails = search_emails(
+                min_importance=parsed.min_importance or 80,
+                date_from=parsed.date_from,
+                date_to=parsed.date_to,
+                limit=limit,
+            )
+            title = f"🔴 {parsed.date_label or '最近'}重要郵件"
+            send_long_message(format_important_emails(emails, title=title))
+        elif parsed.intent == "bank_statements":
+            emails = get_bank_statements(
+                bank_name=parsed.bank,
+                date_from=parsed.date_from,
+                date_to=parsed.date_to,
+                limit=limit,
+            )
+            send_long_message(
+                format_bank_statements(
+                    emails,
+                    bank_name=parsed.bank,
+                    current_month=parsed.date_label == "本月",
+                )
+            )
+        elif parsed.intent == "login_records":
+            emails = get_login_records(
+                bank_name=parsed.bank,
+                date_from=parsed.date_from,
+                date_to=parsed.date_to,
+                bank_only=parsed.bank_only,
+                status=parsed.status,
+                limit=limit,
+            )
+            send_long_message(
+                format_login_records(
+                    emails,
+                    bank_name=parsed.bank,
+                    bank_only=parsed.bank_only,
+                    status=parsed.status,
+                )
+            )
+        elif parsed.intent == "security_emails":
+            emails = get_security_emails(
+                date_from=parsed.date_from,
+                date_to=parsed.date_to,
+                keyword=parsed.keyword,
+                limit=limit,
+            )
+            send_long_message(format_security_emails(emails, keyword=parsed.keyword))
+        elif parsed.intent == "reply_required":
+            emails = _filter_reply_required(
+                search_emails(
+                    date_from=parsed.date_from,
+                    date_to=parsed.date_to,
+                    limit=None,
+                )
+            )
+            send_long_message(format_reply_required_emails(emails))
+        elif parsed.intent == "action_required":
+            emails = _filter_action_required(
+                search_emails(
+                    date_from=parsed.date_from,
+                    date_to=parsed.date_to,
+                    limit=None,
+                )
+            )
+            send_long_message(format_action_required_emails(emails))
+        elif parsed.intent == "sender_search":
+            emails = search_emails(
+                sender=parsed.keyword,
+                date_from=parsed.date_from,
+                date_to=parsed.date_to,
+                limit=limit,
+            )
+            send_long_message(format_sender_search_emails(parsed.keyword, emails))
+        elif parsed.intent == "keyword_search":
+            emails = search_emails(
+                keyword=parsed.keyword,
+                date_from=parsed.date_from,
+                date_to=parsed.date_to,
+                limit=limit,
+            )
+            send_long_message(format_keyword_search_emails(parsed.keyword, emails))
+        elif parsed.intent == "work_emails":
+            emails = _filter_current_category(
+                search_emails(
+                    category=parsed.category or "AI/工作%",
+                    date_from=parsed.date_from,
+                    date_to=parsed.date_to,
+                    limit=None,
+                ),
+                "AI/工作",
+            )
+            send_long_message(format_category_emails("💼 工作郵件", emails))
+        elif parsed.intent == "school_emails":
+            emails = _filter_current_category(
+                search_emails(
+                    category=parsed.category or "AI/學校%",
+                    date_from=parsed.date_from,
+                    date_to=parsed.date_to,
+                    limit=None,
+                ),
+                "AI/學校",
+            )
+            send_long_message(format_category_emails("🎓 學校郵件", emails))
+        else:
+            return False
+    except Exception as e:
+        print("自然郵件查詢失敗：", e)
+        send_long_message("⚠️ 郵件索引查詢失敗，請稍後再試。")
+
+    return True
+
+
+def _mail_for_rules(mail):
+    importance_score = mail.get("importance_score")
+    return {
+        **mail,
+        "id": mail.get("id") or mail.get("message_id") or "",
+        "from": mail.get("from") or mail.get("sender") or "",
+        "sender": mail.get("sender") or mail.get("from") or "",
+        "subject": mail.get("subject") or "",
+        "snippet": mail.get("snippet") or "",
+        "importance": mail.get("importance")
+        or {
+            "score": importance_score if importance_score is not None else 50,
+            "level": mail.get("importance_level") or "",
+        },
+    }
+
+
+def _filter_reply_required(emails):
+    from mail_rules import needs_reply
+
+    result = []
+    for mail in emails:
+        if needs_reply(_mail_for_reply_rules(mail)) is True:
+            result.append(mail)
+    return result
+
+
+def _filter_action_required(emails):
+    from mail_rules import needs_reply
+
+    result = []
+    seen = set()
+    for mail in emails:
+        key = mail.get("message_id") or mail.get("thread_id") or clean_subject(mail)
+        if key in seen:
+            continue
+        is_important = (mail.get("importance_score") or 0) >= 80
+        reply = needs_reply(_mail_for_reply_rules(mail)) is True
+        if is_important or reply:
+            seen.add(key)
+            result.append(mail)
+    return result
+
+
+def _mail_for_reply_rules(mail):
+    rule_mail = _mail_for_rules(mail)
+    if _is_notification_without_reply(mail):
+        rule_mail = {**rule_mail, "snippet": ""}
+    return rule_mail
+
+
+def _is_notification_without_reply(mail):
+    text = " ".join(
+        str(mail.get(key) or "")
+        for key in (
+            "subject",
+            "sender",
+            "from",
+            "category_label",
+            "finance_type",
+            "security_type",
+        )
+    ).lower()
+    notification_keywords = [
+        "登入",
+        "login",
+        "apple pay",
+        "啟用通知",
+        "安全性快訊",
+        "安全通知",
+        "系統通知",
+        "付款成功",
+        "交易成功",
+        "對帳單",
+        "帳單",
+        "通知",
+    ]
+    return any(keyword in text for keyword in notification_keywords)
+
+
+def _filter_current_category(emails, category_prefix):
+    from actions import determine_email_classification
+
+    result = []
+    for mail in emails:
+        label = determine_email_classification(_mail_for_rules(mail)).get("label") or ""
+        if label == category_prefix or label.startswith(f"{category_prefix}/"):
+            result.append(mail)
+    return result
+
+
+def build_unknown_query_message():
+    return """目前看不懂這個郵件查詢，你可以試著問：
+「今天有什麼郵件」
+「富邦最近有沒有登入失敗」
+「這個月有哪些銀行帳單」
+「最近有沒有需要回覆的信」"""
 
 
 def handle_update_index_command():
@@ -985,10 +1452,6 @@ def handle_message(text):
         "使用說明",
     ]
 
-    query = detect_query(raw_text)
-    if query and handle_query_command(query):
-        return
-
     if command in summary_commands:
         handle_summary_command()
     elif command in archive_commands:
@@ -999,8 +1462,18 @@ def handle_message(text):
         handle_confirm_command()
     elif command in help_commands:
         show_help()
+    elif raw_text in UPDATE_INDEX_COMMANDS:
+        handle_update_index_command()
     else:
-        send_telegram_message("看不懂指令，可以輸入「幫助」查看功能。")
+        query = detect_query(raw_text)
+        if query and handle_query_command(query):
+            return
+
+        parsed = parse_query(raw_text)
+        if parsed.matched and handle_natural_query(parsed):
+            return
+
+        send_telegram_message(build_unknown_query_message())
 
 
 def should_run_auto_summary(now, state):

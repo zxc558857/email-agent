@@ -299,17 +299,66 @@ NO_REPLY_KEYWORDS = [
     "商品推廣",
 ]
 
-REPLY_REQUEST_KEYWORDS = [
+NOTIFICATION_RECEIPT_KEYWORDS = [
+    "繳款證明",
+    "付款證明",
+    "收款證明",
+    "交易通知",
+    "付款成功",
+    "已付款",
+    "訂單完成",
+    "電子收據",
+    "收據",
+    "receipt",
+    "payment confirmation",
+    "transaction notification",
+    "order confirmation",
+]
+
+NOTIFICATION_NO_REPLY_KEYWORDS = [
+    "會員確認信",
+    "帳號確認",
+    "email verification",
+    "verify email",
+    "confirmation email",
+    "活動通知",
+    "行銷技巧",
+    "推廣內容",
+    "電子報",
+    "newsletter",
+    "系統通知",
+    "大促成功秘訣",
+]
+
+STRONG_REPLY_REQUEST_KEYWORDS = [
     "請回覆",
-    "請確認",
+    "請回信",
+    "回覆此信",
+    "麻煩回覆",
+    "請回覆確認",
+    "請確認並回覆",
+    "是否參加",
+    "rsvp",
+    "reply to this email",
+    "please reply",
+    "please respond",
+    "please send the requested information",
+    "please provide the requested information",
+]
+
+DIRECT_REPLY_REQUEST_KEYWORDS = [
+    keyword
+    for keyword in STRONG_REPLY_REQUEST_KEYWORDS
+    if keyword != "回覆此信"
+]
+
+REPLY_REQUEST_KEYWORDS = [
+    *STRONG_REPLY_REQUEST_KEYWORDS,
     "請提供",
     "請告知",
-    "是否參加",
     "是否可以",
     "能否",
     "可否",
-    "rsvp",
-    "please reply",
     "please confirm",
     "please provide",
 ]
@@ -418,6 +467,18 @@ def score_email(mail):
 def needs_reply(mail):
     text = _mail_text(mail)
     subject = _subject_text(mail)
+
+    if _contains_any(subject, NOTIFICATION_RECEIPT_KEYWORDS) and not _contains_any(
+        text,
+        STRONG_REPLY_REQUEST_KEYWORDS,
+    ):
+        return False
+
+    if _contains_any(text, NOTIFICATION_NO_REPLY_KEYWORDS) and not _contains_any(
+        text,
+        DIRECT_REPLY_REQUEST_KEYWORDS,
+    ):
+        return False
 
     if not _contains_any(text, REPLY_REQUEST_KEYWORDS):
         return False

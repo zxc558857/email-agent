@@ -484,11 +484,17 @@ def detect_general_label(content, importance, subject=""):
     school_keywords = [
         "中國科技大學",
         "學校",
-        "課程",
         "成績",
-        "註冊",
-        "繳費單",
-        "學生"
+        "註冊組",
+        "學生證",
+        "學籍",
+        "選課",
+        "校務",
+        "教務",
+        "學費",
+        "開學",
+        "課程通知",
+        "註冊繳費"
     ]
 
     ai_keywords = [
@@ -503,6 +509,8 @@ def detect_general_label(content, importance, subject=""):
     ]
 
     social_keywords = [
+        "skool",
+        "skool.com",
         "linkedin",
         "facebook",
         "instagram",
@@ -516,6 +524,11 @@ def detect_general_label(content, importance, subject=""):
         "pchome",
         "costco",
         "apple",
+        "obge tw",
+        "shopline.com",
+        "lg taiwan",
+        "lge.com",
+        "lg electronics",
         "訂單",
         "收據",
         "發票"
@@ -527,6 +540,8 @@ def detect_general_label(content, importance, subject=""):
         "ubereats",
         "kkday",
         "klook",
+        "accupass",
+        "accuvally",
         "toplink",
         "優惠券",
         "折價券",
@@ -540,9 +555,6 @@ def detect_general_label(content, importance, subject=""):
 
     if any(k.lower() in content for k in work_keywords):
         return "AI/工作"
-
-    if any(k.lower() in content for k in school_keywords):
-        return "AI/學校"
 
     security_label = detect_security_label(content, subject)
     if security_label:
@@ -559,6 +571,9 @@ def detect_general_label(content, importance, subject=""):
 
     if any(k.lower() in content for k in ad_keywords):
         return "AI/可封存"
+
+    if any(k.lower() in content for k in school_keywords):
+        return "AI/學校"
 
     if score >= 80:
         return "AI/重要"

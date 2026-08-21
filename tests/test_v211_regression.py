@@ -330,6 +330,158 @@ def run():
         "AI/金融/富邦/帳單",
     )
 
+    assert_case(
+        "Case AA",
+        {
+            "from": "LinkedIn <messages-noreply@linkedin.com>",
+            "subject": "👤 盧昱翰，去認識一下蘇彥宇",
+            "snippet": "國立政治大學的學生",
+        },
+        "AI/社群",
+        expected_archive=True,
+    )
+
+    assert_not_label(
+        "Case AB",
+        {
+            "from": "OBgE TW <notify@shopline.com>",
+            "subject": "OBgE TW: 請設立帳戶密碼",
+            "snippet": "歡迎光臨，為完成您的帳戶設定，請設定密碼。",
+        },
+        "AI/學校",
+    )
+
+    assert_case(
+        "Case AC",
+        {
+            "from": "LG Taiwan <no-reply@twmkt.lge.com>",
+            "subject": "你只差一步，即可享受美好智慧生活",
+            "snippet": "立即註冊你的 LG 產品，以獲得完整的售後服務和保固資訊",
+        },
+        "AI/購物",
+    )
+
+    assert_case(
+        "Case AD",
+        {
+            "from": "TOPLINK上聯展覽 <service@top-link.com.tw>",
+            "subject": "早鳥逛展天天抽30萬家電豪禮",
+            "snippet": "公會主辦品牌加碼，政府補助限量名額",
+        },
+        "AI/可封存",
+        expected_archive=True,
+    )
+
+    assert_not_label(
+        "Case AD2",
+        {
+            "from": "炒股黑客 (Skool) <noreply@skool.com>",
+            "subject": "Weekly digest for Thu, Aug 6 2026",
+            "snippet": "Ray Wang posted 交易課程心得。",
+        },
+        "AI/學校",
+    )
+
+    assert_case(
+        "Case AD2a",
+        {
+            "from": "炒股黑客 (Skool) <noreply@skool.com>",
+            "subject": "4 new notifications since 10:01 am",
+            "snippet": "TFT 學員為了女兒的學費努力，社群裡有新通知。",
+        },
+        "AI/社群",
+    )
+
+    assert_case(
+        "Case AD2b",
+        {
+            "from": "炒股黑客 <noreply@skool.com>",
+            "subject": "Weekly digest",
+            "snippet": "社群貼文摘要。",
+        },
+        "AI/社群",
+    )
+
+    assert_case(
+        "Case AD2c",
+        {
+            "from": "炒股黑客 (Skool) <noreply@skool.com>",
+            "subject": "Skool 社群課程通知",
+            "snippet": "社群課程貼文更新。",
+        },
+        "AI/社群",
+    )
+
+    assert_not_label(
+        "Case AD3",
+        {
+            "from": "ACCUPASS 活動社交平台 <edm@accuvally.com>",
+            "subject": "本週熱門推薦活動",
+            "snippet": "精選課程與活動優惠。",
+        },
+        "AI/學校",
+    )
+
+    assert_not_label(
+        "Case AD4",
+        {
+            "from": "相信動物協會 <crm@faithforanimals.org.tw>",
+            "subject": "相信動物報你知",
+            "snippet": "公益課程與活動更新。",
+        },
+        "AI/學校",
+    )
+
+    assert_not_label(
+        "Case AD5",
+        {
+            "from": "社團法人台灣懷生相信動物協會 <crm@faithforanimals.org.tw>",
+            "subject": "帳單 - 讓流浪到她們為止",
+            "snippet": "本期繳費單與收據資訊。",
+        },
+        "AI/學校",
+    )
+
+    assert_case(
+        "Case AE0",
+        {
+            "from": "大學教務處 <notice@example.edu.tw>",
+            "subject": "選課結果通知",
+            "snippet": "請同學至校務系統查看。",
+        },
+        "AI/學校",
+    )
+
+    assert_case(
+        "Case AE",
+        {
+            "from": "中國科技大學 教務處 <notice@example.edu.tw>",
+            "subject": "開學選課通知",
+            "snippet": "請同學留意校務系統公告。",
+        },
+        "AI/學校",
+    )
+
+    assert_case(
+        "Case AF",
+        {
+            "from": "中國科技大學 註冊組 <notice@example.edu.tw>",
+            "subject": "學費繳費單通知",
+            "snippet": "請同學留意註冊繳費期限。",
+        },
+        "AI/學校",
+    )
+
+    assert_case(
+        "Case AG",
+        {
+            "from": "大學註冊組 <notice@example.edu.tw>",
+            "subject": "本學期註冊繳費通知",
+            "snippet": "請同學留意繳費期限。",
+        },
+        "AI/學校",
+    )
+
 
 if __name__ == "__main__":
     run()

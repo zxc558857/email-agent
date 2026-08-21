@@ -235,6 +235,112 @@ class V24ImportanceTests(unittest.TestCase):
 
         self.assertTrue(needs_reply(item))
 
+    def test_shopee_payment_certificate_does_not_need_reply(self):
+        item = mail(
+            "蝦皮店到店代收款繳款證明",
+            '"蝦皮店到店" <stats.spx@shopee.com>',
+            "請提供資料前，請確認交易內容。",
+        )
+
+        self.assertFalse(needs_reply(item))
+
+    def test_payment_success_confirmation_does_not_need_reply(self):
+        item = mail(
+            "付款成功通知",
+            "Store <notice@example.com>",
+            "請確認交易內容。",
+        )
+
+        self.assertFalse(needs_reply(item))
+
+    def test_receipt_confirmation_does_not_need_reply(self):
+        item = mail(
+            "電子收據",
+            "Store <receipt@example.com>",
+            "請確認資料。",
+        )
+
+        self.assertFalse(needs_reply(item))
+
+    def test_confirm_and_reply_needs_reply(self):
+        item = mail(
+            "請確認並回覆是否出席",
+            "Colleague <person@example.com>",
+        )
+
+        self.assertTrue(needs_reply(item))
+
+    def test_english_requested_information_needs_reply(self):
+        item = mail(
+            "Please reply with the requested information",
+            "HR <hr@example.com>",
+        )
+
+        self.assertTrue(needs_reply(item))
+
+    def test_login_success_footer_confirmation_does_not_need_reply(self):
+        item = mail(
+            "台北富邦行動銀行生物辨識登入「成功」通知",
+            "台北富邦行動銀行 <mbank@dfm.taipeifubon.com.tw>",
+            "若非您本人操作，請確認帳戶安全。",
+        )
+
+        self.assertFalse(needs_reply(item))
+
+    def test_aaeon_internship_materials_needs_reply(self):
+        item = mail(
+            "研揚科技-實習繳交資料說明",
+            "VivianYuan 袁澄 <VivianYuan@aaeon.com.tw>",
+            "請回覆並提供實習繳交資料。",
+        )
+
+        self.assertTrue(needs_reply(item))
+
+    def test_aaeon_internship_reply_needs_reply(self):
+        item = mail(
+            "RE: 研揚科技-實習繳交資料說明",
+            "VivianYuan 袁澄 <VivianYuan@aaeon.com.tw>",
+            "請回覆並提供實習繳交資料。",
+        )
+
+        self.assertTrue(needs_reply(item))
+
+    def test_seller_newsletter_reply_footer_does_not_need_reply(self):
+        item = mail(
+            "🚀大促成功秘訣",
+            '"蝦皮賣家報" <sellerinfo@newsletter.shopee.tw>',
+            "若有問題可回覆此信。",
+        )
+
+        self.assertFalse(needs_reply(item))
+
+    def test_membership_confirmation_does_not_need_reply(self):
+        item = mail(
+            "停車大聲公會員確認信",
+            "停車大聲公團隊 <loudermama@parkinglotapp.com>",
+            "請點擊連結確認，若有問題可回覆此信。",
+        )
+
+        self.assertFalse(needs_reply(item))
+
+    def test_patent_document_content_does_not_need_reply(self):
+        item = mail(
+            "盧昱翰 先生3188--台灣發明「人工智慧聊天系統及其方法」中文專利說明書內容(ITW260372_P-3188-1)",
+            "morris <morris@wpto.com.tw>",
+            "附件為專利說明書內容。",
+        )
+
+        self.assertFalse(needs_reply(item))
+
+    def test_member_confirmation_click_link_does_not_need_reply(self):
+        item = mail(
+            "會員確認信",
+            "Service <notice@example.com>",
+            "請點擊連結確認。",
+        )
+
+        self.assertFalse(needs_reply(item))
+
     def test_newsletter_does_not_need_reply(self):
         item = mail(
             "本週 newsletter",

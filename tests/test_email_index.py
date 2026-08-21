@@ -148,6 +148,45 @@ class EmailIndexTests(unittest.TestCase):
             )
             conn.commit()
 
+    def insert_index_row(
+        self,
+        message_id,
+        subject,
+        sender,
+        category_label,
+        snippet="",
+        importance_score=50,
+    ):
+        email_index.init_db(self.db_path)
+        row = {
+            "message_id": message_id,
+            "thread_id": f"thread-{message_id}",
+            "internal_date": email_index._to_internal_date_ms(NOW),
+            "date_text": "Thu, 13 Aug 2026 10:00:00 +0000",
+            "sender": sender,
+            "sender_email": sender.split("<")[-1].rstrip(">") if "<" in sender else sender,
+            "subject": subject,
+            "snippet": snippet,
+            "importance_score": importance_score,
+            "importance_level": "mid",
+            "can_archive": 0,
+            "category_label": category_label,
+            "bank_name": None,
+            "finance_type": None,
+            "security_type": None,
+            "is_unread": 1,
+            "in_inbox": 1,
+            "indexed_at": "2026-08-13T00:00:00+00:00",
+        }
+        columns = email_index.EMAIL_COLUMNS
+        placeholders = ", ".join("?" for _ in columns)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                f"INSERT INTO emails ({', '.join(columns)}) VALUES ({placeholders})",
+                [row[column] for column in columns],
+            )
+            conn.commit()
+
     def test_init_db_creates_schema(self):
         email_index.init_db(self.db_path)
 
@@ -679,6 +718,62 @@ class EmailIndexTests(unittest.TestCase):
         )
 
         self.assertEqual([row["message_id"] for row in rows], ["real-login"])
+
+    def test_search_category_and_keyword_conditions_stay_grouped(self):
+        self.insert_index_row(
+            "school-linkedin",
+            "學校專案 LinkedIn 講座",
+            "School Office <school@example.edu>",
+            "AI/學校",
+        )
+        self.insert_index_row(
+            "social-linkedin",
+            "LinkedIn 分享看法",
+            "LinkedIn <updates-noreply@linkedin.com>",
+            "AI/社群",
+        )
+        self.insert_index_row(
+            "school-other",
+            "學校課程通知",
+            "School Office <school@example.edu>",
+            "AI/學校",
+        )
+
+        rows = email_index.search_emails(
+            category="AI/學校%",
+            keyword="LinkedIn",
+            db_path=self.db_path,
+        )
+
+        self.assertEqual([row["message_id"] for row in rows], ["school-linkedin"])
+
+    def test_search_category_and_sender_conditions_stay_grouped(self):
+        self.insert_index_row(
+            "work-deepseek",
+            "DeepSeek 合作提案",
+            "DeepSeek <news@deepseek.com>",
+            "AI/工作",
+        )
+        self.insert_index_row(
+            "ai-deepseek",
+            "DeepSeek API New Pricing",
+            "DeepSeek <news@deepseek.com>",
+            "AI/AI資訊",
+        )
+        self.insert_index_row(
+            "work-other",
+            "工作週報",
+            "Team <team@example.com>",
+            "AI/工作",
+        )
+
+        rows = email_index.search_emails(
+            category="AI/工作%",
+            sender="DeepSeek",
+            db_path=self.db_path,
+        )
+
+        self.assertEqual([row["message_id"] for row in rows], ["work-deepseek"])
 
     def test_index_module_has_no_ai_dependency(self):
         source = (ROOT / "email_index.py").read_text(encoding="utf-8").lower()

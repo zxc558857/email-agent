@@ -591,9 +591,19 @@ def get_emails(date_from=None, date_to=None, limit=20, db_path=None):
     return _query_emails(where, params, limit=limit, db_path=db_path)
 
 
-def get_important_emails(min_score=80, limit=20, days=None, db_path=None):
+def get_important_emails(
+    min_score=80,
+    limit=20,
+    days=None,
+    date_from=None,
+    date_to=None,
+    db_path=None,
+):
     where = ["importance_score >= ?"]
     params = [min_score]
+    date_where, date_params = _date_filters(date_from, date_to)
+    where.extend(date_where)
+    params.extend(date_params)
     if days:
         where.append("internal_date >= ?")
         params.append(_recent_start_ms(days))
@@ -630,6 +640,7 @@ def get_login_records(
     date_from=None,
     date_to=None,
     bank_only=False,
+    status=None,
     limit=20,
     db_path=None,
 ):
@@ -643,19 +654,97 @@ def get_login_records(
         params.append(bank_name)
     if bank_only:
         where.append("bank_name IS NOT NULL")
+    status_filters = _login_status_filters(status)
+    if status_filters:
+        status_where, status_params = status_filters
+        where.append(status_where)
+        params.extend(status_params)
     return _query_emails(where, params, limit=limit, db_path=db_path)
 
 
 def get_security_emails(
     date_from=None,
     date_to=None,
+    keyword=None,
     limit=20,
     db_path=None,
 ):
     where, params = _date_filters(date_from, date_to)
     where.append("(security_type IS NOT NULL OR category_label LIKE ?)")
     params.append("AI/安全/%")
+    if keyword:
+        where.append(
+            "(subject LIKE ? COLLATE NOCASE "
+            "OR sender LIKE ? COLLATE NOCASE "
+            "OR sender_email LIKE ? COLLATE NOCASE "
+            "OR snippet LIKE ? COLLATE NOCASE)"
+        )
+        like = f"%{keyword}%"
+        params.extend([like, like, like, like])
     return _query_emails(where, params, limit=limit, db_path=db_path)
+
+
+def search_emails(
+    keyword=None,
+    sender=None,
+    category=None,
+    min_importance=None,
+    date_from=None,
+    date_to=None,
+    limit=20,
+    db_path=None,
+):
+    where, params = _date_filters(date_from, date_to)
+
+    if keyword:
+        where.append(
+            "(subject LIKE ? COLLATE NOCASE "
+            "OR sender LIKE ? COLLATE NOCASE "
+            "OR snippet LIKE ? COLLATE NOCASE)"
+        )
+        like = f"%{keyword}%"
+        params.extend([like, like, like])
+
+    if sender:
+        where.append(
+            "(sender LIKE ? COLLATE NOCASE "
+            "OR sender_email LIKE ? COLLATE NOCASE "
+            "OR subject LIKE ? COLLATE NOCASE)"
+        )
+        like = f"%{sender}%"
+        params.extend([like, like, like])
+
+    if category:
+        if "%" in category:
+            where.append("category_label LIKE ?")
+        else:
+            where.append("category_label = ?")
+        params.append(category)
+
+    if min_importance is not None:
+        where.append("importance_score >= ?")
+        params.append(min_importance)
+
+    return _query_emails(where, params, limit=limit, db_path=db_path)
+
+
+def _login_status_filters(status):
+    if status == "failure":
+        return (
+            "(subject LIKE ? COLLATE NOCASE OR subject LIKE ? COLLATE NOCASE)",
+            ["%失敗%", "%failed%"],
+        )
+    if status == "abnormal":
+        return (
+            "(subject LIKE ? OR subject LIKE ? OR subject LIKE ? OR subject LIKE ?)",
+            ["%異常%", "%可疑%", "%不正常%", "%陌生登入%"],
+        )
+    if status == "success":
+        return (
+            "(subject LIKE ? COLLATE NOCASE OR subject LIKE ? COLLATE NOCASE)",
+            ["%成功%", "%success%"],
+        )
+    return None
 
 
 def get_stats(db_path=None):
